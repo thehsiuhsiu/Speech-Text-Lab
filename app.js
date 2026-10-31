@@ -1,4 +1,6 @@
-import { ASR_MODELS, SPEAKER_MODEL } from './models.js';
+// 版本號跟著 index.html 的 app.js?v=…，讓背景程式和模型清單也一起更新
+const V = new URL(import.meta.url).search;
+const { ASR_MODELS, SPEAKER_MODEL } = await import(`./models.js${V}`);
 
 const $ = (id) => document.getElementById(id);
 const SR = 16000;
@@ -23,7 +25,7 @@ const state = {
 // ---------- 背景執行緒 ----------
 let worker = null;
 function makeWorker() {
-  worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+  worker = new Worker(new URL(`./worker.js${V}`, import.meta.url), { type: 'module' });
   worker.onmessage = onWorkerMessage;
   worker.onerror = (e) => {
     console.error(e);

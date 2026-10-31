@@ -54,3 +54,7 @@
 ## 授權
 
 使用的套件與模型各有授權：Transformers.js（Apache-2.0）、ONNX Runtime（MIT）、opencc-js（MIT）、coi-serviceworker（MIT）、Breeze ASR 25（Apache-2.0）、Whisper（MIT）、WavLM。
+
+## 更新程式後
+
+改了任何檔案，要把 `index.html` 裡 `app.js?v=` 和 `style.css?v=` 的數字加 1，瀏覽器才會抓新版（GitHub Pages 會讓瀏覽器快取檔案約 10 分鐘）。
