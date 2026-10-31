@@ -72,3 +72,27 @@ audio { width: 100%; margin: 8px 0; }
   .seg .text { grid-column: 1 / -1; }
   .seg .tools { grid-column: 1 / -1; opacity: 1; }
 }
+
+/* ---- 裁切軌道 ---- */
+.timeline { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 4px; margin: 8px 0 12px; background: #fcfcfa; }
+.tl-toolbar { margin: 4px 0 8px; }
+.tl-zoom-wrap input { width: 140px; }
+.tl-scroll { overflow-x: auto; overflow-y: hidden; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.tl-inner { position: relative; height: 134px; min-width: 100%; }
+.tl-inner canvas { position: absolute; left: 0; top: 0; cursor: pointer; display: block; }
+.tl-clips { position: absolute; left: 0; right: 0; top: 104px; height: 28px; }
+.tl-clip { position: absolute; top: 0; height: 26px; box-sizing: border-box; border: 1px solid #c9c9c9; background: #f1f1f1; color: #888; font-size: 12px; line-height: 24px; padding: 0 6px; overflow: hidden; white-space: nowrap; cursor: pointer; border-radius: 4px; user-select: none; }
+.tl-clip.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tl-cut { position: absolute; top: 0; height: 132px; width: 0; border-left: 2px solid #c0622b; cursor: ew-resize; z-index: 2; }
+.tl-cut::before { content: ''; position: absolute; left: -9px; top: 0; width: 16px; height: 132px; } /* 加寬可拖曳範圍 */
+.tl-cut-handle { position: absolute; left: -7px; top: 0; width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 9px solid #c0622b; }
+.tl-cut-del { position: absolute; left: 3px; top: 1px; padding: 0 4px; font-size: 12px; line-height: 14px; border-radius: 3px; background: #c0622b; color: #fff; border: none; cursor: pointer; }
+.tl-cut.dragging { border-left-color: #8a3a12; }
+.tl-playhead { position: absolute; top: 0; height: 104px; width: 0; border-left: 2px solid #d02020; pointer-events: none; z-index: 3; }
+.tl-meta { margin: 6px 0 0; }
+.tl-meta .tl-time { margin-right: auto; font-family: ui-monospace, Consolas, monospace; }
+.tl-list { display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
+.tl-row { flex-direction: row; align-items: center; gap: 8px; color: var(--text); font-size: 14px; padding: 3px 6px; border-radius: 6px; }
+.tl-row.sel { background: var(--accent-soft); }
+.tl-row span { flex: 1; font-family: ui-monospace, Consolas, monospace, sans-serif; }
+button.small { padding: 3px 10px; font-size: 13px; }

@@ -1,6 +1,7 @@
 // 版本號跟著 index.html 的 app.js?v=…，讓背景程式和模型清單也一起更新
 const V = new URL(import.meta.url).search;
 const { ASR_MODELS, SPEAKER_MODEL } = await import(`./models.js${V}`);
+const { createTimeline } = await import(`./timeline.js${V}`);
 
 const $ = (id) => document.getElementById(id);
 const SR = 16000;
@@ -21,6 +22,8 @@ const state = {
   folderFiles: null,    // [{path, file}]
   runStart: 0,
 };
+
+let timeline = null; // 裁切軌道（檔尾建立）
 
 // ---------- 背景執行緒 ----------
 let worker = null;
@@ -112,7 +115,8 @@ function showError(text) {
 function clearError() { $('run-text').classList.remove('error'); $('load-text').classList.remove('error'); }
 function setBusy(b) {
   state.busy = b;
-  $('btn-start').disabled = b || !state.modelLoaded || !state.audio;
+  const noClip = timeline && timeline.hasAudio() && timeline.selectedRanges().length === 0;
+  $('btn-start').disabled = b || !state.modelLoaded || !state.audio || noClip;
   $('btn-load').disabled = b;
   $('btn-cancel').hidden = !b;
   const rb = $('btn-rediarize');
@@ -267,6 +271,7 @@ async function loadAudioFile(file) {
     player.src = URL.createObjectURL(file);
     player.hidden = false;
     $('audio-info').textContent = `「${file.name}」長度 ${fmtDur(state.duration)}`;
+    timeline.setAudio(data);
     worker.postMessage({ type: 'set-audio', audio: data.slice() });
   } catch (e) {
     console.error(e);
@@ -299,7 +304,7 @@ $('btn-start').addEventListener('click', () => {
   worker.postMessage({
     type: 'transcribe',
     audio: state.audio.slice(),
-    opts: { numSpeakers: selectedSpeakers(), toTraditional: $('opt-trad').checked },
+    opts: { numSpeakers: selectedSpeakers(), toTraditional: $('opt-trad').checked, ranges: timeline.selectedRanges() },
   });
 });
 
@@ -754,6 +759,11 @@ function renderAll() {
 
 window.addEventListener('beforeunload', (e) => {
   if (state.dirty && state.segments.length) { e.preventDefault(); e.returnValue = ''; }
+});
+
+timeline = createTimeline({
+  root: $('timeline-wrap'), player: $('player'), fmtTime, fmtDur,
+  onChange: () => updateStartButton(),
 });
 
 initModelSelect();
