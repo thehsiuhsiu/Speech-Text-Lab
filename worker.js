@@ -3,7 +3,8 @@ import {
   pipeline, env, AutoFeatureExtractor, WavLMForXVector,
 } from './lib/transformers.min.js';
 import * as OpenCC from './lib/opencc-cn2t.js';
-import { ASR_MODELS, SPEAKER_MODEL } from './models.js';
+// 不用頂層 await，免得背景程式還沒準備好就漏接訊息
+const modelsReady = import(`./models.js${new URL(import.meta.url).search}`);
 
 const SR = 16000;
 
@@ -106,6 +107,7 @@ function progressForwarder(label) {
 
 async function loadAsr({ modelKey, device: pref, source, files }) {
   setSource(source, files || []);
+  const { ASR_MODELS } = await modelsReady;
   const cfg = ASR_MODELS[modelKey];
   const { device, f16 } = await detectDevice(pref);
   const list = device === 'webgpu' ? (f16 ? cfg.dtypes.webgpu_f16 : cfg.dtypes.webgpu) : cfg.dtypes.wasm;
@@ -134,6 +136,7 @@ async function loadAsr({ modelKey, device: pref, source, files }) {
 
 async function loadSpeakerModel() {
   if (spkModel) return;
+  const { SPEAKER_MODEL } = await modelsReady;
   let lastErr = null;
   post({ type: 'status', text: '載入分說話者模型（約 100MB，只需下載一次）…' });
   for (const dtype of SPEAKER_MODEL.dtypes) {

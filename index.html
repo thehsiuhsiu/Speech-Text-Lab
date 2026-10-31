@@ -6,7 +6,7 @@
 <title>語音轉文字（本機辨識・分說話者）</title>
 <!-- 讓 GitHub Pages 也能開啟多執行緒（跨來源隔離） -->
 <script src="coi-serviceworker.min.js"></script>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
 <header class="top">
@@ -129,6 +129,7 @@
   <a href="https://github.com/nk2028/opencc-js" target="_blank" rel="noopener">opencc-js</a>。
 </footer>
 
-<script type="module" src="app.js"></script>
+<!-- 每次更新程式就把 v= 的數字加 1，避免瀏覽器用到舊檔 -->
+<script type="module" src="app.js?v=3"></script>
 </body>
 </html>
