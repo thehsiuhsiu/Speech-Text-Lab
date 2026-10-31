@@ -296,6 +296,7 @@ $('btn-start').addEventListener('click', () => {
   $('run-progress').hidden = false;
   $('run-bar').style.width = '0%';
   $('run-text').textContent = '開始…';
+  state.mode = selectedSpeakers() === 0 ? 'asr' : 'diar';
   worker.postMessage({
     type: 'transcribe',
     audio: state.audio.slice(),
@@ -376,8 +377,10 @@ function onWorkerMessage(ev) {
       const bar = $('run-bar');
       bar.classList.remove('indeterminate');
       const pct = m.total ? (m.done / m.total) * 100 : 0;
+      // 有分說話者時：先分說話者（0～30%）再轉文字（30～100%）；重新分說話者時整條都是分說話者
+      const spkFirst = state.mode === 'diar';
       if (m.stage === 'asr') {
-        bar.style.width = `${(pct * 0.85).toFixed(1)}%`;
+        bar.style.width = `${(spkFirst ? 30 + pct * 0.7 : pct).toFixed(1)}%`;
         let eta = '';
         if (m.done > 0 && m.audioDone > 0) {
           const rate = m.elapsed / m.audioDone; // 每秒錄音花幾秒
@@ -385,14 +388,18 @@ function onWorkerMessage(ev) {
         }
         $('run-text').textContent = `轉文字中：${fmtTime(m.audioDone)}／${fmtTime(m.audioTotal)}（第 ${Math.min(m.done + 1, m.total)}／${m.total} 段${eta}）`;
       } else {
-        bar.style.width = `${(85 + pct * 0.15).toFixed(1)}%`;
-        $('run-text').textContent = `分辨說話者中：${m.done}／${m.total} 段`;
+        bar.style.width = `${(spkFirst ? pct * 0.3 : pct).toFixed(1)}%`;
+        let eta = '';
+        if (m.done > 5 && m.elapsed > 0) eta = `，預估還要 ${fmtDur((m.elapsed / m.done) * (m.total - m.done))}`;
+        $('run-text').textContent = state.mode === 'diar'
+          ? `第 1 步／共 2 步：分辨說話者中（${m.done}／${m.total}${eta}），完成後開始轉文字`
+          : `分辨說話者中：${m.done}／${m.total} 段${eta}`;
       }
       break;
     }
     case 'segments':
       state.segments = m.segments.map((s) => ({ ...s }));
-      ensureSpeakers(1);
+      ensureSpeakers(Math.max(1, ...state.segments.map((s) => s.speaker + 1)));
       renderAll();
       break;
     case 'done': {
@@ -492,6 +499,7 @@ function renderSpeakers() {
     setBusy(true);
     $('run-progress').hidden = false;
     $('run-text').textContent = '重新分辨說話者…';
+    state.mode = 'rediar';
     worker.postMessage({
       type: 'rediarize',
       numSpeakers: v === 'auto' ? 'auto' : Number(v),

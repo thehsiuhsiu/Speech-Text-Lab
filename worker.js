@@ -237,15 +237,24 @@ async function transcribe({ audio, opts }) {
   lastAudio = audio;
   const myKey = ++lastKey;
   const total = audio.length / SR;
-  const chunks = planChunks(audio);
-  const segments = [];
   const needConvert = opts.toTraditional;
   const t0 = performance.now();
-  for (let i = 0; i < chunks.length; i++) {
+
+  // 先分說話者、切出「每段只有一個人」的片段，再逐段轉文字
+  let plan;
+  if (opts.numSpeakers !== 0) {
+    plan = await speakerTurns(audio, opts.numSpeakers, myKey);
+    if (!plan) { post({ type: 'cancelled', segments: [] }); return; }
+  } else {
+    plan = planChunks(audio).filter((c) => c.hasSpeech).map((c) => ({ start: c.start, end: c.end, speaker: 0 }));
+  }
+
+  const segments = [];
+  const tAsr = performance.now();
+  for (let i = 0; i < plan.length; i++) {
     if (cancelled || myKey !== lastKey) { post({ type: 'cancelled', segments }); return; }
-    const c = chunks[i];
-    post({ type: 'progress', stage: 'asr', done: i, total: chunks.length, audioDone: c.start, audioTotal: total, elapsed: (performance.now() - t0) / 1000 });
-    if (!c.hasSpeech) continue;
+    const c = plan[i];
+    post({ type: 'progress', stage: 'asr', done: i, total: plan.length, audioDone: c.start, audioTotal: total, elapsed: (performance.now() - tAsr) / 1000 });
     const slice = audio.subarray(Math.floor(c.start * SR), Math.floor(c.end * SR));
     let out;
     try {
@@ -270,18 +279,183 @@ async function transcribe({ audio, opts }) {
       if (b == null || Number.isNaN(b) || b > dur + 0.5) b = dur;
       a = Math.min(Math.max(0, a), dur);
       b = Math.min(Math.max(a + 0.2, b), dur);
-      segments.push({ start: +(c.start + a).toFixed(2), end: +(c.start + b).toFixed(2), text, speaker: 0 });
+      segments.push({ start: +(c.start + a).toFixed(2), end: +(c.start + b).toFixed(2), text, speaker: c.speaker });
     }
     post({ type: 'segments', segments });
   }
-  post({ type: 'progress', stage: 'asr', done: chunks.length, total: chunks.length, audioDone: total, audioTotal: total, elapsed: (performance.now() - t0) / 1000 });
-
-  if (opts.numSpeakers !== 0 && segments.length > 1) {
-    const labels = await diarize(audio, segments, opts.numSpeakers, myKey);
-    if (!labels) { post({ type: 'cancelled', segments }); return; }
-    labels.forEach((l, i) => { segments[i].speaker = l; });
-  }
+  post({ type: 'progress', stage: 'asr', done: plan.length, total: plan.length, audioDone: total, audioTotal: total, elapsed: (performance.now() - tAsr) / 1000 });
+  // 依出現順序重新編號說話者
+  const order = new Map();
+  segments.forEach((sg) => { if (!order.has(sg.speaker)) order.set(sg.speaker, order.size); sg.speaker = order.get(sg.speaker); });
   post({ type: 'done', segments, elapsed: (performance.now() - t0) / 1000, asrConfig });
+}
+
+// ---- 先分說話者：滑動視窗算聲紋 → 分群 → 時間軸 → 每段一個人 ----
+const WIN = 1.5;  // 每個視窗 1.5 秒
+const HOP = 0.75; // 每 0.75 秒一個
+const MIN_TURN = 1.0; // 少於 1 秒的換人視為誤判，併到前後
+
+async function speakerTurns(audio, k, myKey) {
+  await loadSpeakerModel();
+  const total = audio.length / SR;
+  const { rms } = frameRms(audio);
+  const nF = rms.length; // 每格 10ms
+  const noise = percentile(rms, 0.1);
+  const thr = Math.max(noise * 3, 0.004);
+  const voiced = new Uint8Array(nF);
+  for (let f = 0; f < nF; f++) voiced[f] = rms[f] > thr ? 1 : 0;
+  // 補平 0.3 秒內的短暫停頓
+  {
+    let f = 0;
+    while (f < nF) {
+      if (voiced[f]) { f++; continue; }
+      let g = f; while (g < nF && !voiced[g]) g++;
+      if (f > 0 && g < nF && g - f <= 30) for (let x = f; x < g; x++) voiced[x] = 1;
+      f = g;
+    }
+  }
+
+  // 1. 有人聲的視窗
+  const wins = [];
+  for (let t = 0; t + WIN <= total + 0.01; t += HOP) {
+    const fa = Math.floor(t * 100), fb = Math.min(nF, Math.floor((t + WIN) * 100));
+    let v = 0; for (let f = fa; f < fb; f++) v += voiced[f];
+    if (fb > fa && v / (fb - fa) >= 0.5) wins.push(t);
+  }
+  if (wins.length < 2) {
+    return planChunks(audio).filter((c) => c.hasSpeech).map((c) => ({ start: c.start, end: c.end, speaker: 0 }));
+  }
+
+  // 2. 每個視窗的聲紋
+  const embs = [];
+  const t0 = performance.now();
+  for (let i = 0; i < wins.length; i++) {
+    if (cancelled || myKey !== lastKey) return null;
+    if (i % 5 === 0) post({ type: 'progress', stage: 'spk', done: i, total: wins.length, elapsed: (performance.now() - t0) / 1000 });
+    embs.push(await embedSlice(audio, wins[i], Math.min(total, wins[i] + WIN)));
+  }
+  post({ type: 'progress', stage: 'spk', done: wins.length, total: wins.length, elapsed: (performance.now() - t0) / 1000 });
+
+  // 3. 分群
+  if (k === 'auto') k = guessSpeakerCount(subsample(embs, 300));
+  const labels = k <= 1 ? new Array(embs.length).fill(0) : kmeans(embs, k).labels;
+
+  // 4. 每 10ms 一格投票決定是誰
+  const votes = Array.from({ length: Math.max(1, k) }, () => new Float32Array(nF));
+  wins.forEach((t, i) => {
+    const fa = Math.floor(t * 100), fb = Math.min(nF, Math.floor((t + WIN) * 100));
+    const mid = (fa + fb) / 2, half = (fb - fa) / 2;
+    for (let f = fa; f < fb; f++) votes[labels[i]][f] += 1 - Math.abs(f - mid) / (half + 1) * 0.5; // 視窗中間權重較高
+  });
+  const lab = new Int16Array(nF).fill(-1);
+  for (let f = 0; f < nF; f++) {
+    if (!voiced[f]) continue;
+    let best = -1, bv = 0;
+    for (let c = 0; c < votes.length; c++) if (votes[c][f] > bv) { bv = votes[c][f]; best = c; }
+    lab[f] = best;
+  }
+
+  // 5. 整理成「連續同一人」的區段（中間的靜音也算進去），太短的換人併掉
+  let runs = [];
+  for (let f = 0; f < nF; f++) {
+    if (lab[f] < 0) continue;
+    const last = runs[runs.length - 1];
+    if (last && last.speaker === lab[f] && f - last.endF <= 150) last.endF = f + 1; // 1.5 秒內的停頓視為同一段
+    else runs.push({ speaker: lab[f], startF: f, endF: f + 1 });
+  }
+  let changed = true;
+  while (changed && runs.length > 1) {
+    changed = false;
+    for (let i = 0; i < runs.length; i++) {
+      const r = runs[i];
+      if ((r.endF - r.startF) / 100 >= MIN_TURN) continue;
+      const prev = runs[i - 1], next = runs[i + 1];
+      const target = prev && next ? ((prev.endF - prev.startF) >= (next.endF - next.startF) ? prev : next) : (prev || next);
+      if (!target) continue;
+      target.startF = Math.min(target.startF, r.startF);
+      target.endF = Math.max(target.endF, r.endF);
+      runs.splice(i, 1);
+      changed = true;
+      break;
+    }
+    // 合併後相鄰同一人的區段
+    const merged = [];
+    for (const r of runs) {
+      const last = merged[merged.length - 1];
+      if (last && last.speaker === r.speaker) last.endF = Math.max(last.endF, r.endF);
+      else merged.push({ ...r });
+    }
+    runs = merged;
+  }
+
+  // 6. 轉成秒數，太長的再依停頓切成 ≤ 28 秒
+  const plan = [];
+  for (const r of runs) {
+    const s = Math.max(0, r.startF / 100 - 0.15);
+    const e = Math.min(total, r.endF / 100 + 0.15);
+    if (e - s < 0.3) continue;
+    if (e - s <= 28) { plan.push({ start: s, end: e, speaker: r.speaker }); continue; }
+    const sub = audio.subarray(Math.floor(s * SR), Math.floor(e * SR));
+    for (const c of planChunks(sub)) {
+      if (c.hasSpeech) plan.push({ start: s + c.start, end: s + c.end, speaker: r.speaker });
+    }
+  }
+  // 第一個開口的是說話者 1
+  const order = new Map();
+  plan.forEach((p) => { if (!order.has(p.speaker)) order.set(p.speaker, order.size); p.speaker = order.get(p.speaker); });
+  return plan;
+}
+
+function subsample(arr, n) {
+  if (arr.length <= n) return arr;
+  const step = arr.length / n;
+  return Array.from({ length: n }, (_, i) => arr[Math.floor(i * step)]);
+}
+
+// 餘弦 k-means（k-means++ 初始化、多次重來取最好），比階層式分群不怕離群值
+export function kmeans(X, k, { restarts = 8, iters = 40, weights = null } = {}) {
+  const n = X.length, dim = X[0].length;
+  const w = weights || new Array(n).fill(1);
+  let best = null;
+  for (let r = 0; r < restarts; r++) {
+    // k-means++
+    const cents = [X[Math.floor(Math.random() * n)]];
+    const dmin = new Float64Array(n).fill(Infinity);
+    while (cents.length < k) {
+      const c = cents[cents.length - 1];
+      let sum = 0;
+      for (let i = 0; i < n; i++) { const d = Math.max(0, 1 - dot(X[i], c)); if (d < dmin[i]) dmin[i] = d; sum += dmin[i] * dmin[i]; }
+      let pick = Math.random() * sum, idx = 0;
+      for (; idx < n - 1; idx++) { pick -= dmin[idx] * dmin[idx]; if (pick <= 0) break; }
+      cents.push(X[idx]);
+    }
+    let C = cents.map((c) => Float32Array.from(c));
+    const lab = new Int32Array(n).fill(-1);
+    for (let it = 0; it < iters; it++) {
+      let moved = 0;
+      for (let i = 0; i < n; i++) {
+        let bc = 0, bv = -Infinity;
+        for (let c = 0; c < k; c++) { const v = dot(X[i], C[c]); if (v > bv) { bv = v; bc = c; } }
+        if (lab[i] !== bc) { lab[i] = bc; moved++; }
+      }
+      const sums = Array.from({ length: k }, () => new Float32Array(dim));
+      const cnt = new Float64Array(k);
+      for (let i = 0; i < n; i++) { const S = sums[lab[i]]; for (let d = 0; d < dim; d++) S[d] += X[i][d] * w[i]; cnt[lab[i]] += w[i]; }
+      for (let c = 0; c < k; c++) {
+        if (cnt[c] > 0) C[c] = normalize(sums[c]);
+        else { // 空群：拿離自己群中心最遠的點
+          let far = 0, fv = Infinity;
+          for (let i = 0; i < n; i++) { const v = dot(X[i], C[lab[i]]); if (v < fv) { fv = v; far = i; } }
+          C[c] = Float32Array.from(X[far]);
+        }
+      }
+      if (moved === 0) break;
+    }
+    let cost = 0;
+    for (let i = 0; i < n; i++) cost += w[i] * (1 - dot(X[i], C[lab[i]]));
+    if (!best || cost < best.cost) best = { cost, labels: Array.from(lab), centroids: C };
+  }
+  return best;
 }
 
 // ---- 分說話者：每段算聲紋 → 分群 ----
@@ -385,33 +559,13 @@ export function guessSpeakerCount(X) {
 }
 
 export function clusterEmbeddings(embs, durations, k) {
-  // 段落太多時，先用最長的 300 段分群，其餘段落歸到最近的群
-  const n = embs.length;
-  const idx = Array.from({ length: n }, (_, i) => i);
-  const core = n > 300 ? [...idx].sort((a, b) => durations[b] - durations[a]).slice(0, 300) : idx;
-  const X = core.map((i) => embs[i]);
-  if (k === 'auto') k = guessSpeakerCount(X);
-  const parent = agglomerate(X, k);
-  // 建立群中心
-  const groups = new Map();
-  core.forEach((ci, pos) => {
-    const g = parent[pos];
-    if (!groups.has(g)) groups.set(g, { sum: new Float32Array(embs[ci].length), w: 0 });
-    const G = groups.get(g);
-    const w = Math.max(0.5, Math.min(durations[ci], 10));
-    for (let d = 0; d < G.sum.length; d++) G.sum[d] += embs[ci][d] * w;
-    G.w += w;
-  });
-  const centroids = [...groups.values()].map((G) => normalize(G.sum));
-  // 每段歸到最近的群中心
-  const raw = embs.map((e) => {
-    let best = 0, bv = -Infinity;
-    centroids.forEach((c, ci) => { const v = dot(e, c); if (v > bv) { bv = v; best = ci; } });
-    return best;
-  });
-  // 依出現順序重新編號：第一個開口的是說話者 1
+  if (k === 'auto') k = guessSpeakerCount(subsample(embs, 300));
+  if (k <= 1 || embs.length < 2) return embs.map(() => 0);
+  // 長段落的聲紋比較可靠，權重較高
+  const weights = durations.map((d) => Math.max(0.3, Math.min(d, 8)));
+  const { labels } = kmeans(embs, Math.min(k, embs.length), { weights });
   const order = new Map();
-  return raw.map((r) => { if (!order.has(r)) order.set(r, order.size); return order.get(r); });
+  return labels.map((r) => { if (!order.has(r)) order.set(r, order.size); return order.get(r); });
 }
 
 async function diarize(audio, segments, k, myKey) {
