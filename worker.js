@@ -97,6 +97,7 @@ function progressForwarder(label) {
   return (p) => {
     if (p.status === 'progress_total') {
       post({ type: 'load-progress', label, loaded: p.loaded, total: p.total, progress: p.progress });
+      if (p.progress >= 99.99) post({ type: 'load-init', label });
     } else if (p.status === 'initiate' || p.status === 'download') {
       post({ type: 'load-file', label, file: p.file });
     }
@@ -122,6 +123,7 @@ async function loadAsr({ modelKey, device: pref, source, files }) {
     } catch (e) {
       lastErr = e;
       console.warn('載入失敗，換下一種格式', dtype, e);
+      post({ type: 'status', text: `這種格式載入失敗（${String(e?.message || e).slice(0, 80)}），改試下一種…` });
     }
   }
   throw lastErr || new Error('模型載入失敗');

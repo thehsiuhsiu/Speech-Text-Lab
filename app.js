@@ -317,8 +317,11 @@ $('btn-cancel').addEventListener('click', () => {
 });
 
 // ---------- 背景訊息 ----------
+let initTimer = 0;
+function stopInitTimer() { if (initTimer) { clearInterval(initTimer); initTimer = 0; } }
 function onWorkerMessage(ev) {
   const m = ev.data;
+  if (['loaded', 'error', 'status', 'progress', 'segments', 'done', 'cancelled'].includes(m.type)) stopInitTimer();
   switch (m.type) {
     case 'status':
       if (!state.modelLoaded) $('load-text').textContent = m.text;
@@ -326,9 +329,30 @@ function onWorkerMessage(ev) {
       break;
     case 'load-file':
       break;
+    case 'load-init': {
+      // 下載完成後，大模型還要花時間載入到顯示卡／記憶體，這段期間沒有進度可以顯示
+      const bar = state.modelLoaded ? $('run-bar') : $('load-bar');
+      const txt = state.modelLoaded ? $('run-text') : $('load-text');
+      bar.classList.add('indeterminate');
+      if (!initTimer) {
+        const t0 = Date.now();
+        const where = $('device-select').value === 'wasm' ? '記憶體' : '顯示卡';
+        const tick = () => {
+          const sec = Math.round((Date.now() - t0) / 1000);
+          let msg = `${m.label}下載完成，正在載入到${where}…已等 ${fmtDur(sec)}（大模型第一次可能要 1～5 分鐘，請不要關閉頁面）`;
+          if (sec > 300) msg += '。⚠️ 等太久的話可能是記憶體不足：重新整理後改用較小的模型，或執行方式改「CPU」再試。';
+          txt.textContent = msg;
+        };
+        tick();
+        initTimer = setInterval(tick, 1000);
+      }
+      break;
+    }
     case 'load-progress': {
       const bar = state.modelLoaded ? $('run-bar') : $('load-bar');
       const txt = state.modelLoaded ? $('run-text') : $('load-text');
+      if ((m.progress || 0) >= 99.99 && initTimer) break; // 已在「載入中」階段，保留計時訊息
+      stopInitTimer();
       bar.classList.remove('indeterminate');
       bar.style.width = `${Math.min(100, m.progress || 0).toFixed(1)}%`;
       txt.textContent = `下載${m.label}：${fmtBytes(m.loaded)}／${fmtBytes(m.total)}（${(m.progress || 0).toFixed(0)}%）`;
