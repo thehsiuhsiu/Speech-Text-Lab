@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>語音轉文字（本機辨識・分說話者）</title>
+<!-- 讓 GitHub Pages 也能開啟多執行緒（跨來源隔離） -->
+<script src="coi-serviceworker.min.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <h1>語音轉文字</h1>
+  <p class="privacy">🔒 錄音只在這台電腦處理，不會上傳。只有「模型檔」需要下載一次。</p>
+</header>
+
+<main>
+  <!-- 1. 模型 -->
+  <section class="card" id="sec-model">
+    <h2><span class="step">1</span>載入模型</h2>
+    <div class="grid">
+      <label>轉文字模型
+        <select id="model-select"></select>
+      </label>
+      <label>執行方式
+        <select id="device-select">
+          <option value="auto">自動選擇</option>
+          <option value="webgpu">顯示卡（WebGPU，較快）</option>
+          <option value="wasm">CPU（相容性最好，較慢）</option>
+        </select>
+      </label>
+      <label>模型來源
+        <select id="source-select">
+          <option value="hf">從 Hugging Face 下載（存在瀏覽器）</option>
+          <option value="folder">從電腦資料夾載入</option>
+        </select>
+      </label>
+    </div>
+    <p class="hint" id="model-desc"></p>
+    <div id="folder-row" class="row" hidden>
+      <button type="button" id="btn-pick-folder" class="secondary">選擇模型資料夾…</button>
+      <input type="file" id="folder-input" webkitdirectory hidden>
+      <span id="folder-status" class="hint">尚未選擇</span>
+    </div>
+    <div class="row">
+      <button type="button" id="btn-load" class="primary">載入模型</button>
+      <button type="button" id="btn-export-models" class="secondary" title="把瀏覽器裡已下載的模型存成資料夾，之後可以從資料夾載入">把已下載的模型存到資料夾…</button>
+      <span id="env-info" class="hint"></span>
+    </div>
+    <div id="load-progress" class="progress-wrap" hidden>
+      <div class="progress"><div class="bar" id="load-bar"></div></div>
+      <div class="hint" id="load-text"></div>
+    </div>
+  </section>
+
+  <!-- 2. 錄音 -->
+  <section class="card" id="sec-audio">
+    <h2><span class="step">2</span>選擇錄音</h2>
+    <div id="drop" class="drop" tabindex="0">
+      <strong>把錄音或影片拖到這裡</strong>，或<button type="button" id="btn-pick-audio" class="link">點此選擇檔案</button>
+      <div class="hint">支援 mp3、m4a、wav、mp4 等常見格式</div>
+      <input type="file" id="audio-input" accept="audio/*,video/*" hidden>
+    </div>
+    <div id="audio-info" class="hint"></div>
+    <audio id="player" controls hidden></audio>
+    <div class="grid">
+      <label>說話者人數
+        <select id="speakers-select">
+          <option value="0">不分說話者</option>
+          <option value="auto">自動判斷</option>
+          <option value="2" selected>2 人</option>
+          <option value="3">3 人</option>
+          <option value="4">4 人</option>
+          <option value="5">5 人</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="opt-trad" checked> 輸出轉成臺灣繁體用語</label>
+    </div>
+    <div class="row">
+      <button type="button" id="btn-start" class="primary" disabled>開始轉文字</button>
+      <button type="button" id="btn-cancel" class="danger" hidden>停止</button>
+      <button type="button" id="btn-open-project" class="secondary">開啟之前存的專案…</button>
+      <input type="file" id="project-input" accept=".json,application/json" hidden>
+    </div>
+    <div id="run-progress" class="progress-wrap" hidden>
+      <div class="progress"><div class="bar" id="run-bar"></div></div>
+      <div class="hint" id="run-text"></div>
+    </div>
+  </section>
+
+  <!-- 3. 結果 -->
+  <section class="card" id="sec-result" hidden>
+    <h2><span class="step">3</span>校對與匯出</h2>
+    <div id="speaker-panel" class="speaker-panel"></div>
+    <p class="hint">點時間可從該處播放；文字可直接修改；說話者標錯可以從下拉選單改。游標放在文字中按「分割」可把一段拆成兩段。</p>
+    <div id="transcript" class="transcript"></div>
+    <div class="export">
+      <div class="row">
+        <label>格式
+          <select id="export-format">
+            <option value="qa">問答格式（問：／答：）</option>
+            <option value="txt">逐字稿（含時間與說話者）</option>
+            <option value="plain">純文字（含說話者）</option>
+            <option value="srt">SRT 字幕</option>
+          </select>
+        </label>
+        <label id="qa-asker-wrap">發問的人
+          <select id="qa-asker"></select>
+        </label>
+        <label class="check"><input type="checkbox" id="opt-merge" checked> 合併同一人連續的段落</label>
+      </div>
+      <textarea id="export-preview" readonly></textarea>
+      <div class="row">
+        <button type="button" id="btn-copy" class="primary">複製</button>
+        <button type="button" id="btn-download" class="secondary">下載檔案</button>
+        <button type="button" id="btn-save-project" class="secondary">儲存專案（之後可繼續校對）</button>
+        <span id="copy-status" class="hint"></span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot hint">
+  辨識結果可能有錯字與說話者誤判，正式使用前請務必對照錄音校對。
+  使用 <a href="https://github.com/huggingface/transformers.js" target="_blank" rel="noopener">Transformers.js</a>、
+  <a href="https://huggingface.co/MediaTek-Research/Breeze-ASR-25" target="_blank" rel="noopener">Breeze ASR 25</a>、
+  <a href="https://github.com/openai/whisper" target="_blank" rel="noopener">Whisper</a>、
+  <a href="https://huggingface.co/microsoft/wavlm-base-plus-sv" target="_blank" rel="noopener">WavLM</a>、
+  <a href="https://github.com/nk2028/opencc-js" target="_blank" rel="noopener">opencc-js</a>。
+</footer>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
