@@ -44,6 +44,7 @@
 | `app.js` | 畫面操作、讀取錄音、校對、匯出 |
 | `worker.js` | 背景執行：載入模型、轉文字、分說話者 |
 | `models.js` | 可選用的模型清單 |
+| `timeline.js` | 錄音裁切軌道（切段、勾選要辨識的片段） |
 | `lib/` | Transformers.js、ONNX Runtime、opencc-js（簡轉繁）放在本地，不依賴外部 CDN |
 | `coi-serviceworker.min.js` | 讓 GitHub Pages 能開啟 CPU 多執行緒 |
 
