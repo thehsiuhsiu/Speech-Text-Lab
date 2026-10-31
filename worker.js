@@ -111,11 +111,14 @@ async function loadAsr({ modelKey, device: pref, source, files }) {
   const list = device === 'webgpu' ? (f16 ? cfg.dtypes.webgpu_f16 : cfg.dtypes.webgpu) : cfg.dtypes.wasm;
   if (asr) { try { await asr.dispose(); } catch { /* ignore */ } asr = null; }
   let lastErr = null;
-  for (const dtype of list) {
+  for (const item of list) {
+    const isWrapped = item && typeof item === 'object' && 'dtype' in item;
+    const dtype = isWrapped ? item.dtype : item;
+    const extra = isWrapped && item.use_external_data_format ? { use_external_data_format: item.use_external_data_format } : {};
     try {
       post({ type: 'status', text: `載入 ${cfg.label}（${device === 'webgpu' ? '顯示卡' : 'CPU'}）…` });
       asr = await pipeline('automatic-speech-recognition', cfg.id, {
-        device, dtype, progress_callback: progressForwarder('轉文字模型'),
+        device, dtype, ...extra, progress_callback: progressForwarder('轉文字模型'),
       });
       asrKey = modelKey;
       asrConfig = { device, dtype };

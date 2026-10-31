@@ -1,14 +1,20 @@
-// 可選用的轉文字模型。dtype 依序嘗試，前一個失敗（例如檔案不存在、顯示卡不支援）就換下一個。
+const BREEZE_Q4F16 = {
+  dtype: 'q4f16',
+  use_external_data_format: { 'encoder_model_q4f16.onnx': 1, 'decoder_model_merged_q4f16.onnx': 1 },
+};
+
+// 可選用的轉文字模型。dtype 依序嘗試（可以是字串、各檔案的 dtype 物件，或 { dtype, use_external_data_format }），前一個失敗（例如檔案不存在、顯示卡不支援）就換下一個。
 export const ASR_MODELS = {
   breeze: {
     id: 'markno5/Breeze-ASR-25-ONNX',
     label: 'Breeze ASR 25（台灣華語、中英夾雜最準）',
-    desc: '聯發科 Breeze ASR 25 的瀏覽器版本，約 1.5–1.7GB。準確度最好，但需要較好的電腦；建議有獨立顯示卡並使用「顯示卡」模式，用 CPU 會非常慢。',
+    desc: '聯發科 Breeze ASR 25 的瀏覽器版本，約 1.2–1.5GB。準確度最好，但需要較好的電腦；建議有獨立顯示卡並使用「顯示卡」模式，用 CPU 會非常慢。',
     traditional: true,
+    // q4：作者最新整理的版本（約 1.2GB）；q4f16 的權重放在另外的 .onnx_data 檔，要一起下載
     dtypes: {
-      webgpu_f16: ['q4f16', 'q8'],
-      webgpu: ['q8'],
-      wasm: ['q8'],
+      webgpu_f16: ['q4', BREEZE_Q4F16, 'q8'],
+      webgpu: ['q4', 'q8'],
+      wasm: ['q4', 'q8'],
     },
   },
   turbo: {
