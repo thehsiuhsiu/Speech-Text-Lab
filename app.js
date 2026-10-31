@@ -349,6 +349,7 @@ function onWorkerMessage(ev) {
       break;
     }
     case 'load-progress': {
+      if (!state.busy) break; // 已結束（成功或失敗）後才到的進度訊息不要蓋掉結果
       const bar = state.modelLoaded ? $('run-bar') : $('load-bar');
       const txt = state.modelLoaded ? $('run-text') : $('load-text');
       if ((m.progress || 0) >= 99.99 && initTimer) break; // 已在「載入中」階段，保留計時訊息
